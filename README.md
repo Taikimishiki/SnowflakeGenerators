@@ -5,8 +5,8 @@ This snowflake generator is based on [Unique ID Generators](https://medium.com/p
 var snowflake = new SnowflakeGenerator(workerId: 1, epoch: new DateTime(2018, 1, 1));
 
 var id = snowflake.Generate(processId: 1);
-var newId = snowflake.GetDateCreation(id);
-var oldId = snowflake.GetDateCreation(1123400248501342208);
+var newIdCreationDate = snowflake.GetDateCreation(id);
+var oldIdCreationDate = snowflake.GetDateCreation(1123400248501342208);
 
 Console.WriteLine($"Snowflake ID: {id}");
 Console.WriteLine($"New Snowflake ID Date Creation: {newId}");
