@@ -1,6 +1,6 @@
 namespace SnowflakeGenerators;
 
-public class SnowflakeGenerator(DateTime epoch)
+public class SnowflakeGenerator(DateTime epoch) : ISnowflakeGenerator
 {
     private int _timestampShift;
     private int _currentFieldShifts;
