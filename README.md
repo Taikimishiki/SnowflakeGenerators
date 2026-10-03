@@ -15,7 +15,7 @@ var id2 = generator.Generate(new Dictionary<string, int>
     { "Worker", 1 }
 });
 
-long oldId = 1158692301086655488;
+var oldId = 1158692301086655488;
 
 Console.WriteLine($"{oldId}'s Date: {generator.GetDateCreation(oldId)}");
 Console.WriteLine($"{oldId}'s Worker: {generator.GetFieldValue(oldId, "Worker")}");
