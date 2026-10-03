@@ -1,41 +1,46 @@
 namespace SnowflakeGenerators;
 
-public class SnowflakeGenerator : ISnowflakeGenerator
+public class SnowflakeGenerator(DateTime epoch)
 {
-    private const int WORKER_ID_BITS = 5;
-    private const int PROCESS_ID_BITS = 5;
-    private const int SEQUENCE_BITS = 12;
+    private int _timestampShift;
+    private int _currentFieldShifts;
     
-    private const int MAX_WORKER_ID = -1 ^ (-1 << WORKER_ID_BITS);
-    private const int MAX_PROCESS_ID = -1 ^ (-1 << PROCESS_ID_BITS);
-    private const int MAX_SEQUENCE = -1 ^ (-1 << SEQUENCE_BITS);
-
-    private const int WORKER_ID_SHIFT = SEQUENCE_BITS;
-    private const int PROCESS_ID_SHIFT = WORKER_ID_BITS + SEQUENCE_BITS;
-    private const int TIMESTAMP_SHIFT = WORKER_ID_BITS + PROCESS_ID_BITS + SEQUENCE_BITS;
-
-    private readonly int _workerId;
-    private int _sequence;
+    private int _sequenceBits = 12;
+    private long _sequence;
     
-    private readonly long _epoch;
+    private readonly long _epoch = (long) epoch.Subtract(DateTime.UnixEpoch).TotalMilliseconds;
     private long _lastTimestamp = -1;
     
     private readonly Lock _lock = new();
-
-    public SnowflakeGenerator(int workerId, DateTime epoch)
+    private readonly Dictionary<string, int> _bitAllocation = [ ];
+    private readonly Dictionary<string, int> _fieldShifts = [ ];
+    
+    private long MaxSequence => -1L ^ (-1L << _sequenceBits);
+    
+    public SnowflakeGenerator AddFieldBits(string name, int bits)
     {
-        _epoch = (long) epoch.Subtract(DateTime.UnixEpoch).TotalMilliseconds;
-        _workerId = workerId;
-
-        if (_workerId is < 0 or > MAX_WORKER_ID)
+        if (_timestampShift == 0)
         {
-            throw new InvalidOperationException($"Worker ID must be between 0 and {MAX_WORKER_ID}");
+            _timestampShift = _sequenceBits;
         }
+        
+        _currentFieldShifts += bits;
+        _fieldShifts[name] = _currentFieldShifts;
+        
+        _timestampShift += bits;
+        _bitAllocation[name] = bits;
+        return this;
+    }
+    
+    public SnowflakeGenerator SetSequenceBits(int bits)
+    {
+        _sequenceBits = bits;
+        return this;
     }
 
     public DateTime GetDateCreation(long snowflakeId)
     {
-        long timestamp = (snowflakeId >> TIMESTAMP_SHIFT) + _epoch;
+        long timestamp = (snowflakeId >> _timestampShift) + _epoch;
         var timeZone = TimeSpan.FromHours(8);
         var absoluteTime = DateTimeOffset
             .FromUnixTimeMilliseconds(timestamp)
@@ -43,15 +48,38 @@ public class SnowflakeGenerator : ISnowflakeGenerator
         
         return absoluteTime.DateTime;
     }
-
-    public static int GetWorkerId(long id) => (int) (id >> SEQUENCE_BITS) & MAX_WORKER_ID;
-    public static int GetProcessId(long id) => (int) (id >> (WORKER_ID_BITS + SEQUENCE_BITS)) & MAX_PROCESS_ID;
     
-    public long Generate(int processId)
+    public long GetFieldValue(long id, string name)
     {
-        if (processId is < 0 or > MAX_PROCESS_ID)
+        if (!_bitAllocation.TryGetValue(name, out var bits) || !_fieldShifts.TryGetValue(name, out var shift))
         {
-            throw new InvalidOperationException($"Process ID must be between 0 and {MAX_PROCESS_ID}");
+            throw new InvalidOperationException($"Field {name} not found.");
+        }
+        
+        return (id >> shift) & (1L << bits) - 1;
+    }
+
+    
+    public long Generate(Dictionary<string, int> fields)
+    {
+        if (fields.Count == 0)
+        {
+            throw new InvalidOperationException("No fields specified.");
+        }
+        
+        foreach (var field in fields.Reverse())
+        {
+            if (!_bitAllocation.TryGetValue(field.Key, out var bits))
+            {
+                continue;
+            }
+            
+            long max = -1L - (-1L << bits);
+            
+            if (field.Value < 0 || field.Value > max)
+            {
+                throw new InvalidOperationException($"Field must be between 0 and {max}");
+            }
         }
         
         lock (_lock)
@@ -65,11 +93,12 @@ public class SnowflakeGenerator : ISnowflakeGenerator
 
             if (timestamp == _lastTimestamp)
             {
-                _sequence = (_sequence + 1) & MAX_SEQUENCE;
+                _sequence++;
 
-                if (_sequence == 0)
+                if (_sequence > MaxSequence)
                 {
                     timestamp = GetNextTimestamp(_lastTimestamp);
+                    _sequence = 0;
                 }
             }
             else
@@ -78,11 +107,13 @@ public class SnowflakeGenerator : ISnowflakeGenerator
             }
 
             _lastTimestamp = timestamp;
+            
+            long id = (timestamp - _epoch) << _timestampShift;
 
-            long id = ((timestamp - _epoch) << TIMESTAMP_SHIFT)
-                | ((uint) _workerId << WORKER_ID_SHIFT)
-                | ((uint) processId << PROCESS_ID_SHIFT)
-                | (uint) _sequence;
+            id = _fieldShifts.Aggregate(id, (current, fieldShift) =>
+                current | (uint) fields[fieldShift.Key] << fieldShift.Value);
+
+            id |= _sequence;
 
             return id;
         }
